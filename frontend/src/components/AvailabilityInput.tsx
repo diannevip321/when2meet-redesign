@@ -150,7 +150,7 @@ const AvailabilityInput: React.FC = () => {
     <Box sx={{
       minHeight:"100vh",
       display:"flex",
-      alignItems:"top",
+      alignItems:"center",
       justifyContent:"center",
       background:"linear-gradient(135deg,#5B0EED 0%,#2575fc 100%)",
       p:2

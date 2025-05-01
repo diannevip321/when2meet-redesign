@@ -21,6 +21,7 @@ import {
   Chip,
   Stack,
   useTheme,
+  Tooltip,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 
@@ -28,17 +29,12 @@ const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const TOTAL = 5;
 const NAMES = ["Alice", "Bob", "Carol", "Dave", "Eve"];
 
-// -- SAMPLE AVAILABILITY --
-// Each person has a list of { day, start, end } in minutes.
-// We've added two “everyone” slots on Friday 9:00–9:30 (5/5)
-// and a 4-person slot on Monday 11:00–11:30 (everyone except Carol).
+// sample availability with 5/5 and 4/5 slots built in
 const SAMPLE: Record<string, { day: number; start: number; end: number }[]> = {
   Alice: [
     { day: 0, start: 9 * 60, end: 11 * 60 + 30 },
     { day: 2, start: 10 * 60, end: 12 * 60 },
-    // 4-person Monday 11:00–11:30
     { day: 0, start: 11 * 60, end: 11 * 60 + 30 },
-    // 5/5 Friday  9:00– 9:30
     { day: 4, start: 9 * 60, end: 9 * 60 + 30 },
   ],
   Bob: [
@@ -50,7 +46,6 @@ const SAMPLE: Record<string, { day: number; start: number; end: number }[]> = {
   Carol: [
     { day: 1, start: 14 * 60, end: 16 * 60 },
     { day: 2, start: 10 * 60, end: 11 * 60 + 30 },
-    // Carol *skips* the Monday 11:00–11:30 chunk, so that becomes 4-person
     { day: 4, start: 9 * 60, end: 9 * 60 + 30 },
   ],
   Dave: [
@@ -68,14 +63,14 @@ const SAMPLE: Record<string, { day: number; start: number; end: number }[]> = {
 const GroupAvailability: React.FC = () => {
   const theme = useTheme();
 
-  // build 30-minute slots from 9:00 to 18:00
+  // build half-hour slots from 9:00 to 18:15
   const slots = useMemo(() => {
-    const a: number[] = [];
-    for (let m = 9 * 60; m <= 18 * 60; m += 30) a.push(m);
-    return a;
+    const arr: number[] = [];
+    for (let m = 9 * 60; m <= 18 * 60 + 15; m += 30) arr.push(m);
+    return arr;
   }, []);
 
-  // map "day-slot" to list of names
+  // countMap["day-slot"] = list of names available
   const countMap = useMemo(() => {
     const m: Record<string, string[]> = {};
     for (let day = 0; day < 7; day++) {
@@ -93,11 +88,10 @@ const GroupAvailability: React.FC = () => {
   const [view, setView] = useState<0 | 1>(0);
   const [minPeople, setMinPeople] = useState(1);
 
-  // prepare list-view intervals (coalesced contiguous half-hours)
+  // coalesce contiguous slots for list view
   const listData = useMemo(() => {
     type G = { day: number; start: number; end: number; users: string[] };
     const all: G[] = [];
-    // get slots meeting threshold
     Object.entries(countMap)
       .filter(([, users]) => users.length >= minPeople)
       .map(([key, users]) => {
@@ -124,6 +118,10 @@ const GroupAvailability: React.FC = () => {
     return all;
   }, [countMap, minPeople]);
 
+  // get a tinted green based on number available
+  const getCellColor = (count: number) =>
+    alpha(theme.palette.success.main, 0.4 + (count / TOTAL) * 0.6);
+
   return (
     <Box
       sx={{
@@ -135,25 +133,15 @@ const GroupAvailability: React.FC = () => {
         background: "linear-gradient(135deg, #5B0EED 0%, #2575fc 100%)",
       }}
     >
-      <Paper
-        elevation={10}
-        sx={{ width: 800, maxWidth: "100%", p: 4, borderRadius: 2 }}
-      >
+      <Paper elevation={10} sx={{ width: 800, maxWidth: "100%", p: 4, borderRadius: 2 }}>
         <Typography variant="h4" fontWeight="bold" gutterBottom>
           Group Availability
         </Typography>
         <Typography variant="subtitle1" color="textSecondary" gutterBottom>
-          Hover for names; click a cell to select a slot.
+          Hover any cell to see who’s available.
         </Typography>
 
-        <Box
-          sx={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            mb: 2,
-          }}
-        >
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 2 }}>
           <Tabs
             value={view}
             onChange={(_, v) => setView(v as 0 | 1)}
@@ -188,9 +176,7 @@ const GroupAvailability: React.FC = () => {
                 <TableRow>
                   <TableCell>Time</TableCell>
                   {DAYS.map((d) => (
-                    <TableCell key={d} align="center">
-                      {d}
-                    </TableCell>
+                    <TableCell key={d} align="center">{d}</TableCell>
                   ))}
                 </TableRow>
               </TableHead>
@@ -198,29 +184,25 @@ const GroupAvailability: React.FC = () => {
                 {slots.map((slot) => (
                   <TableRow key={slot} hover>
                     <TableCell>
-                      {dayjs()
-                        .startOf("day")
-                        .add(slot, "minute")
-                        .format("h:mm A")}
+                      {dayjs().startOf("day").add(slot, "minute").format("h:mm A")}
                     </TableCell>
                     {DAYS.map((_, day) => {
                       const users = countMap[`${day}-${slot}`] || [];
                       const meets = users.length >= minPeople;
                       return (
-                        <TableCell
+                        <Tooltip
                           key={day + "-" + slot}
-                          sx={{
-                            bgcolor: meets
-                              ? alpha(
-                                  theme.palette.success.main,
-                                  0.4 + (users.length / TOTAL) * 0.6
-                                )
-                              : theme.palette.grey[100],
-                            cursor: "pointer",
-                            p: 0,
-                            height: 32,
-                          }}
-                        />
+                          title={users.length ? users.join(", ") : "No one available"}
+                        >
+                          <TableCell
+                            sx={{
+                              bgcolor: meets ? getCellColor(users.length) : theme.palette.grey[100],
+                              cursor: "pointer",
+                              p: 0,
+                              height: 32,
+                            }}
+                          />
+                        </Tooltip>
                       );
                     })}
                   </TableRow>
@@ -233,60 +215,25 @@ const GroupAvailability: React.FC = () => {
           <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
             {listData.map((g, i) => {
               const ratio = g.users.length / TOTAL;
-              const borderColor = alpha(
-                theme.palette.success.main,
-                0.4 + ratio * 0.6
-              );
+              const borderColor = alpha(theme.palette.success.main, 0.4 + ratio * 0.6);
               return (
-                <Paper
-                  key={i}
-                  elevation={1}
-                  sx={{
-                    display: "flex",
-                    alignItems: "center",
-                    borderLeft: `5px solid ${borderColor}`,
-                    p: 2,
-                    mb: 1,
-                  }}
-                >
+                <Paper key={i} elevation={1} sx={{ display: "flex", alignItems: "center", borderLeft: `5px solid ${borderColor}`, p: 2, mb: 1 }}>
                   <Box sx={{ flexGrow: 1 }}>
                     <Typography variant="h6">
-                      {DAYS[g.day]} —{" "}
-                      {dayjs()
-                        .startOf("day")
-                        .add(g.start, "minute")
-                        .format("h:mm A")}{" "}
-                      to{" "}
-                      {dayjs()
-                        .startOf("day")
-                        .add(g.end, "minute")
-                        .format("h:mm A")}
+                      {DAYS[g.day]} — {dayjs().startOf("day").add(g.start, "minute").format("h:mm A")} to {dayjs().startOf("day").add(g.end, "minute").format("h:mm A")}
                     </Typography>
                     <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
                       {g.users.map((u) => (
-                        <Chip
-                          key={u}
-                          label={u}
-                          size="small"
-                          variant="outlined"
-                        />
+                        <Chip key={u} label={u} size="small" variant="outlined" />
                       ))}
                     </Stack>
                   </Box>
-                  <Chip
-                    label={`${g.users.length}/${TOTAL}`}
-                    color="success"
-                    size="small"
-                  />
+                  <Chip label={`${g.users.length}/${TOTAL}`} color="success" size="small" />
                 </Paper>
               );
             })}
             {listData.length === 0 && (
-              <Typography
-                variant="body2"
-                color="textSecondary"
-                sx={{ textAlign: "center", mt: 4 }}
-              >
+              <Typography variant="body2" color="textSecondary" sx={{ textAlign: "center", mt: 4 }}>
                 No slots match your filter.
               </Typography>
             )}
