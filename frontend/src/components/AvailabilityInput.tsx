@@ -1,278 +1,343 @@
 // src/components/AvailabilityInput.tsx
-import React, { useState, useRef } from "react";
+
+import React, { useState, useMemo, useEffect } from "react";
+import dayjs, { Dayjs } from "dayjs";
+
 import {
   Box,
   Paper,
+  Typography,
   Tabs,
   Tab,
-  Typography,
+  TableContainer,
   Table,
   TableHead,
-  TableBody,
   TableRow,
   TableCell,
-  TableContainer,
+  TableBody,
+  FormControl,
+  InputLabel,
   Select,
   MenuItem,
-  InputLabel,
-  FormControl,
   Button,
-  IconButton,
   List,
   ListItem,
   ListItemText,
-  Divider,
-  useTheme,
-  alpha,
+  ListItemSecondaryAction,
+  IconButton,
+  InputAdornment,
   TextField
 } from "@mui/material";
+
 import DeleteIcon from "@mui/icons-material/Delete";
 import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
 import { TimePicker } from "@mui/x-date-pickers/TimePicker";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
-import dayjs, { Dayjs } from "dayjs";
+import AccessTimeIcon from "@mui/icons-material/AccessTime";
 
-const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const hours = Array.from({ length: 9 }, (_, i) => 9 + i); // 9–17h
+interface Interval {
+  day: string;       // "Mon" | … | "Sun"
+  startMin: number;  // minutes from midnight
+  endMin: number;    // exclusive
+}
 
-type SlotKey = `${number}-${number}`; // "dayIdx-hour"
+const DAYS_OF_WEEK = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+const SLOT_MIN = 30;          // 30-minute grid
+const EARLIEST = 9*60;        // 9:00am
+const LATEST   = 18*60+15;    // 6:15pm
 
-export default function AvailabilityInput() {
-  const theme = useTheme();
-  // store cell-wise availability
-  const [avail, setAvail] = useState<Record<SlotKey, boolean>>({});
-  // history for undo
-  const [history, setHistory] = useState<Record<SlotKey, boolean>[]>([]);
-  // dragging state for grid
-  const dragging = useRef(false);
-  // tab index: 0 = Grid, 1 = Form
+const AvailabilityInput: React.FC = () => {
   const [tab, setTab] = useState(0);
+  const [intervals, setIntervals] = useState<Interval[]>([]);
+  const [selectedMap, setSelectedMap] = useState<Record<string,Set<number>>>({});
 
-  // form-mode state: chosen day & times
-  const [formDay, setFormDay] = useState<number>(0);
+  // Form state
+  const [formDay, setFormDay]     = useState(DAYS_OF_WEEK[0]);
   const [formStart, setFormStart] = useState<Dayjs>(dayjs().hour(9).minute(0));
-  const [formEnd, setFormEnd] = useState<Dayjs>(dayjs().hour(10).minute(0));
-  // list of ranges to display
-  const [ranges, setRanges] = useState<
-    { day: number; start: Dayjs; end: Dayjs }[]
-  >([]);
+  const [formEnd,   setFormEnd]   = useState<Dayjs>(dayjs().hour(10).minute(0));
+  const [error,     setError]     = useState("");
 
-  // common helpers
-  const recordHistory = () => setHistory(h => [...h, { ...avail }]);
-  const toggleCell = (key: SlotKey) => {
-    recordHistory();
-    setAvail(a => ({ ...a, [key]: !a[key] }));
-  };
-
-  // grid handlers
-  const handleMouseDown = (key: SlotKey) => {
-    dragging.current = true;
-    toggleCell(key);
-  };
-  const handleMouseOver = (key: SlotKey) => {
-    if (dragging.current) toggleCell(key);
-  };
-  const handleMouseUp = () => {
-    dragging.current = false;
-  };
-  const undo = () => {
-    if (!history.length) return;
-    const prev = history[history.length - 1];
-    setHistory(h => h.slice(0, -1));
-    setAvail(prev);
-  };
-
-  // form handlers
-  const addRange = () => {
-    if (formEnd.isAfter(formStart)) {
-      setRanges(r => [...r, { day: formDay, start: formStart, end: formEnd }]);
-      // also mark in the grid
-      recordHistory();
-      const newAvail = { ...avail };
-      for (let h = formStart.hour(); h < formEnd.hour(); h++) {
-        const key = `${formDay}-${h}` as SlotKey;
-        newAvail[key] = true;
+  // Rebuild selectedMap from intervals
+  useEffect(() => {
+    const map: Record<string,Set<number>> = {};
+    intervals.forEach(({day,startMin,endMin}) => {
+      if (!map[day]) map[day] = new Set();
+      for (let m = startMin; m < endMin; m += SLOT_MIN) {
+        map[day].add(m);
       }
-      setAvail(newAvail);
+    });
+    setSelectedMap(map);
+  }, [intervals]);
+
+  // Toggle one cell and re-chunk into intervals
+  const toggleCell = (day:string, m:number) => {
+    setError("");
+    const nm = {...selectedMap};
+    if (!nm[day]) nm[day] = new Set();
+    if (nm[day].has(m)) nm[day].delete(m);
+    else nm[day].add(m);
+
+    const next:Interval[] = [];
+    Object.entries(nm).forEach(([d,setM]) => {
+      const arr = Array.from(setM).sort((a,b)=>a-b);
+      let start = arr[0], prev = start;
+      for (let i=1; i<=arr.length; i++) {
+        if (i===arr.length || arr[i]!==prev+SLOT_MIN) {
+          next.push({day:d, startMin:start, endMin:prev+SLOT_MIN});
+          if (i< arr.length) {
+            start = arr[i];
+            prev = start;
+          }
+        } else prev = arr[i];
+      }
+    });
+    setIntervals(next);
+  };
+
+  // Mouse‐drag painting
+  const [dragVal, setDragVal] = useState<boolean|null>(null);
+  useEffect(()=>{
+    const up = ()=>setDragVal(null);
+    document.addEventListener("mouseup",up);
+    return ()=>document.removeEventListener("mouseup",up);
+  },[]);
+  const handleDown = (d:string,m:number)=>{
+    const cur = selectedMap[d]?.has(m)??false;
+    setDragVal(!cur);
+    toggleCell(d,m);
+  };
+  const handleEnter = (d:string,m:number)=>{
+    if (dragVal!==null && (selectedMap[d]?.has(m)??false)!==dragVal) {
+      toggleCell(d,m);
     }
   };
-  const removeRange = (idx: number) => {
-    recordHistory();
-    const rem = ranges[idx];
-    setRanges(r => r.filter((_, i) => i !== idx));
-    const newAvail = { ...avail };
-    for (let h = rem.start.hour(); h < rem.end.hour(); h++) {
-      const key = `${rem.day}-${h}` as SlotKey;
-      newAvail[key] = false;
+
+  // Hour groups for splitting each hour into two rows
+  const slotGroups = useMemo(()=>{
+    const groups:{hour:number; minutes:number[]}[] = [];
+    for (let h=EARLIEST/60; h< LATEST/60; h++){
+      groups.push({ hour:h, minutes:[h*60, h*60+30] });
     }
-    setAvail(newAvail);
+    return groups;
+  },[]);
+
+  // Add via form
+  const addInterval = () => {
+    setError("");
+    const sd = formStart.hour()*60 + formStart.minute();
+    const ed = formEnd.hour()*60   + formEnd.minute();
+    if (ed<=sd) { setError("End must be after start"); return; }
+
+    // snap to grid
+    const as = Math.floor(sd/SLOT_MIN)*SLOT_MIN;
+    const ae = Math.ceil(ed/SLOT_MIN)*SLOT_MIN;
+
+    if (intervals.some(i=>
+      i.day===formDay && !(ae<=i.startMin||as>=i.endMin)
+    )) {
+      setError("Overlaps existing"); return;
+    }
+    setIntervals([...intervals, {day:formDay, startMin:as, endMin:ae}]);
+  };
+
+  // Remove one
+  const removeInterval = (idx:number)=>{
+    setError("");
+    setIntervals(intervals.filter((_,i)=>i!==idx));
   };
 
   return (
-    <Box onMouseUp={handleMouseUp} sx={{ p: 2, minHeight: "100vh", background: "linear-gradient(135deg, #5B0EED 0%, #2575fc 100%)" }}>
-      <Paper sx={{ maxWidth: 760, m: "auto", p: 3, borderRadius: 2 }}>
-        <Typography variant="h4" gutterBottom align="center">
+    <Box sx={{
+      minHeight:"100vh",
+      display:"flex",
+      alignItems:"top",
+      justifyContent:"center",
+      background:"linear-gradient(135deg,#5B0EED 0%,#2575fc 100%)",
+      p:2
+    }}>
+      <Paper elevation={10} sx={{width:600,p:4,borderRadius:2, textAlign:"center"}}>
+        <Typography variant="h4" fontWeight="bold" gutterBottom>
           Your Availability
+        </Typography>
+        <Typography variant="subtitle1" color="textSecondary" gutterBottom>
+          Click or drag any half-hour cell to toggle.
         </Typography>
 
         <Tabs
           value={tab}
-          onChange={(_, v) => setTab(v)}
+          onChange={(_,v)=>setTab(v)}
+          textColor="primary"
+          indicatorColor="primary"
           centered
-          sx={{ mb: 2 }}
+          sx={{mb:3}}
         >
-          <Tab label="Grid View" />
-          <Tab label="Form View" />
+          <Tab label="Grid View"/>
+          <Tab label="Form View"/>
         </Tabs>
 
-        {tab === 0 ? (
-          // ——— GRID MODE ———
+        {tab===0 ? (
           <>
-            <Box display="flex" alignItems="center" mb={2} flexWrap="wrap" gap={2}>
-              <LegendBadge color={theme.palette.grey[200]!} label="Unavailable" />
-              <LegendBadge color={alpha(theme.palette.primary.main, 0.3)} label="Available" />
-              <Box flexGrow={1} />
-              <Button onClick={undo} disabled={!history.length} size="small">Undo</Button>
+            <Box sx={{display:"flex",justifyContent:"center",mb:1,alignItems:"center"}}>
+              <Box sx={{w:20,h:20,border:1,borderColor:"grey.500",mr:1}}/>
+              <Typography variant="body2" mr={2}>Unavailable</Typography>
+              <Box sx={{w:20,h:20,bgcolor:"success.light",mr:1}}/>
+              <Typography variant="body2">Available</Typography>
             </Box>
 
-            <TableContainer>
-              <Table size="small" sx={{ borderCollapse: "collapse" }}>
+            <TableContainer sx={{maxHeight:400}}>
+              <Table stickyHeader>
                 <TableHead>
                   <TableRow>
-                    <TableCell />
-                    {days.map(d => (
+                    <TableCell>Time</TableCell>
+                    {DAYS_OF_WEEK.map(d=>
                       <TableCell key={d} align="center">{d}</TableCell>
-                    ))}
+                    )}
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {hours.map((hour, r) => (
-                    <TableRow
-                      key={hour}
-                      sx={{ backgroundColor: r % 2 ? theme.palette.grey[50] : "inherit" }}
-                    >
-                      <TableCell sx={{ fontWeight: "bold" }}>{`${hour}:00`}</TableCell>
-                      {days.map((_, c) => {
-                        const key = `${c}-${hour}` as SlotKey;
-                        const filled = !!avail[key];
-                        return (
-                          <TableCell
-                            key={key}
-                            onMouseDown={() => handleMouseDown(key)}
-                            onMouseOver={() => handleMouseOver(key)}
-                            tabIndex={0}
-                            aria-pressed={filled}
-                            onKeyDown={e => {
-                              if (e.key === " " || e.key === "Enter") {
-                                e.preventDefault();
-                                toggleCell(key);
-                              }
-                            }}
-                            sx={{
-                              width: 60, height: 40,
-                              bgcolor: filled ? alpha(theme.palette.primary.main, 0.3) : theme.palette.grey[200],
-                              border: 1, borderColor: theme.palette.divider,
-                              cursor: "pointer",
-                              transition: "0.2s",
-                              "&:hover": {
-                                bgcolor: filled
-                                  ? alpha(theme.palette.primary.main, 0.5)
-                                  : alpha(theme.palette.grey[200], 0.7),
-                              },
-                              "&:focus": {
-                                outline: `2px solid ${theme.palette.primary.main}`,
-                              },
-                            }}
-                          />
-                        );
-                      })}
-                    </TableRow>
+                  {slotGroups.map(({hour,minutes})=>(
+                    <React.Fragment key={hour}>
+                      <TableRow hover>
+                        <TableCell rowSpan={2} sx={{fontWeight:"bold"}}>
+                          {dayjs().hour(hour).minute(0).format("h:mm A")}
+                        </TableCell>
+                        {DAYS_OF_WEEK.map(d=>{
+                          const m=minutes[0];
+                          const av=selectedMap[d]?.has(m)??false;
+                          return (
+                            <TableCell
+                              key={d+"-"+m}
+                              onMouseDown={()=>handleDown(d,m)}
+                              onMouseEnter={()=>handleEnter(d,m)}
+                              sx={{
+                                bgcolor:av?"success.light":"grey.100",
+                                cursor:"pointer",
+                                p:0,
+                                height:32
+                              }}
+                            />
+                          );
+                        })}
+                      </TableRow>
+                      <TableRow hover>
+                        {DAYS_OF_WEEK.map(d=>{
+                          const m=minutes[1];
+                          const av=selectedMap[d]?.has(m)??false;
+                          return (
+                            <TableCell
+                              key={d+"-"+m}
+                              onMouseDown={()=>handleDown(d,m)}
+                              onMouseEnter={()=>handleEnter(d,m)}
+                              sx={{
+                                bgcolor:av?"success.light":"grey.100",
+                                cursor:"pointer",
+                                p:0,
+                                height:32
+                              }}
+                            />
+                          );
+                        })}
+                      </TableRow>
+                    </React.Fragment>
                   ))}
                 </TableBody>
               </Table>
             </TableContainer>
           </>
         ) : (
-          // ——— FORM MODE ———
           <>
-            <Box display="flex" flexWrap="wrap" gap={2} mb={2}>
-              <FormControl sx={{ minWidth: 120 }}>
-                <InputLabel>Day</InputLabel>
-                <Select
-                  value={formDay}
-                  label="Day"
-                  onChange={e => setFormDay(Number(e.target.value))}
-                >
-                  {days.map((d, i) => (
-                    <MenuItem key={d} value={i}>{d}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
+            <FormControl fullWidth margin="normal">
+              <InputLabel>Day</InputLabel>
+              <Select
+                label="Day"
+                value={formDay}
+                onChange={e=>setFormDay(e.target.value)}
+              >
+                {DAYS_OF_WEEK.map(d=>
+                  <MenuItem key={d} value={d}>{d}</MenuItem>
+                )}
+              </Select>
+            </FormControl>
 
-              <LocalizationProvider dateAdapter={AdapterDayjs}>
-                <TimePicker
-                  label="Start"
-                  value={formStart}
-                  onChange={v => v && setFormStart(v)}
-                  renderInput={params => <TextField {...params} />}
-                />
-                <TimePicker
-                  label="End"
-                  value={formEnd}
-                  onChange={v => v && setFormEnd(v)}
-                  renderInput={params => <TextField {...params} />}
-                />
-              </LocalizationProvider>
+            <LocalizationProvider dateAdapter={AdapterDayjs}>
+              <TimePicker
+                label="Start Time"
+                value={formStart}
+                onChange={v=>v&&setFormStart(v)}
+                views={["hours","minutes"]}
+                minutesStep={15}
+                ampm
+                renderInput={params=>(
+                  <TextField
+                    {...params}
+                    fullWidth
+                    margin="normal"
+                    InputProps={{
+                      ...params.InputProps,
+                      startAdornment:(
+                        <InputAdornment position="start">
+                          <AccessTimeIcon color="action"/>
+                        </InputAdornment>
+                      )
+                    }}
+                  />
+                )}
+              />
+              <TimePicker
+                label="End Time"
+                value={formEnd}
+                onChange={v=>v&&setFormEnd(v)}
+                views={["hours","minutes"]}
+                minutesStep={15}
+                ampm
+                renderInput={params=>(
+                  <TextField
+                    {...params}
+                    fullWidth
+                    margin="normal"
+                    InputProps={{
+                      ...params.InputProps,
+                      startAdornment:(
+                        <InputAdornment position="start">
+                          <AccessTimeIcon color="action"/>
+                        </InputAdornment>
+                      )
+                    }}
+                  />
+                )}
+              />
+            </LocalizationProvider>
 
-              <Button variant="contained" onClick={addRange} sx={{ alignSelf: "center" }}>
-                Add
+            {error && (
+              <Typography color="error" sx={{mt:1}}>{error}</Typography>
+            )}
+            <Box sx={{textAlign:"right",mt:2}}>
+              <Button variant="contained" onClick={addInterval}>
+                Add Interval
               </Button>
             </Box>
 
-            <Divider sx={{ my: 2 }} />
-
-            <List dense>
-              {ranges.map((r, i) => (
-                <ListItem
-                  key={i}
-                  secondaryAction={
-                    <IconButton edge="end" onClick={() => removeRange(i)}>
-                      <DeleteIcon />
-                    </IconButton>
-                  }
-                >
+            <List dense sx={{mt:2}}>
+              {intervals.map((intv,i)=>(
+                <ListItem key={i} divider>
                   <ListItemText
-                    primary={`${days[r.day]}: ${r.start.format("HH:mm")} – ${r.end.format("HH:mm")}`}
+                    primary={`${intv.day}: `+
+                      `${dayjs().hour(0).minute(intv.startMin).format("h:mm A")} – `+
+                      `${dayjs().hour(0).minute(intv.endMin).format("h:mm A")}`}
                   />
+                  <ListItemSecondaryAction>
+                    <IconButton edge="end" onClick={()=>removeInterval(i)}>
+                      <DeleteIcon/>
+                    </IconButton>
+                  </ListItemSecondaryAction>
                 </ListItem>
               ))}
-              {!ranges.length && (
-                <Typography color="textSecondary" align="center">
-                  No ranges added yet.
-                </Typography>
-              )}
             </List>
           </>
         )}
       </Paper>
     </Box>
   );
-}
+};
 
-// small helper for legend
-function LegendBadge({ color, label }: { color: string; label: string }) {
-  return (
-    <Box display="flex" alignItems="center" gap={0.5}>
-      <Box
-        sx={{
-          width: 20,
-          height: 20,
-          bgcolor: color,
-          border: 1,
-          borderColor: "divider",
-        }}
-      />
-      <Typography variant="body2">{label}</Typography>
-    </Box>
-  );
-}
+export default AvailabilityInput;
