@@ -1,135 +1,143 @@
 // src/components/GroupAvailability.tsx
+
 import React, { useState, useMemo } from "react";
+import dayjs from "dayjs";
 import {
   Box,
   Paper,
   Typography,
   Tabs,
   Tab,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
-  FormHelperText,
   TableContainer,
   Table,
   TableHead,
   TableRow,
   TableCell,
   TableBody,
-  Tooltip,
-  List,
-  ListSubheader,
-  ListItem,
-  ListItemText,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  Chip,
+  Stack,
+  useTheme,
 } from "@mui/material";
-import { alpha, useTheme } from "@mui/material/styles";
-import dayjs from "dayjs";
+import { alpha } from "@mui/material/styles";
 
-// configuration
-const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
-const USERS = ["Alice","Bob","Carol","Dave","Eve"];
-const TOTAL = USERS.length;
-const SLOT_MIN = 30;            // 30-minute granularity
-const EARLIEST = 9 * 60;        //  9:00 AM
-const LATEST   = 18 * 60 + 15;  //  6:15 PM
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const TOTAL = 5;
+const NAMES = ["Alice", "Bob", "Carol", "Dave", "Eve"];
 
-// sample availability data: user → dayIndex → set of minute offsets
-const sampleAvailability: Record<string, Record<number, Set<number>>> = {
-  Alice: { 0: new Set([540,570,600]), 2: new Set([600,630]),   4: new Set([540,570]) },
-  Bob:   { 0: new Set([540,570]),       1: new Set([630,660]),   4: new Set([600,630]) },
-  Carol: { 0: new Set([540]),           2: new Set([600,630,660]),  3: new Set([540,570,600]) },
-  Dave:  { 1: new Set([540,570,600]),   2: new Set([600,630]),     4: new Set([540,570,600]) },
-  Eve:   { 0: new Set([540,570,600]),   3: new Set([600,630]),     5: new Set([540,570,600]) },
+// -- SAMPLE AVAILABILITY --
+// Each person has a list of { day, start, end } in minutes.
+// We've added two “everyone” slots on Friday 9:00–9:30 (5/5)
+// and a 4-person slot on Monday 11:00–11:30 (everyone except Carol).
+const SAMPLE: Record<string, { day: number; start: number; end: number }[]> = {
+  Alice: [
+    { day: 0, start: 9 * 60, end: 11 * 60 + 30 },
+    { day: 2, start: 10 * 60, end: 12 * 60 },
+    // 4-person Monday 11:00–11:30
+    { day: 0, start: 11 * 60, end: 11 * 60 + 30 },
+    // 5/5 Friday  9:00– 9:30
+    { day: 4, start: 9 * 60, end: 9 * 60 + 30 },
+  ],
+  Bob: [
+    { day: 0, start: 9 * 60 + 30, end: 12 * 60 },
+    { day: 4, start: 13 * 60, end: 15 * 60 + 30 },
+    { day: 0, start: 11 * 60, end: 11 * 60 + 30 },
+    { day: 4, start: 9 * 60, end: 9 * 60 + 30 },
+  ],
+  Carol: [
+    { day: 1, start: 14 * 60, end: 16 * 60 },
+    { day: 2, start: 10 * 60, end: 11 * 60 + 30 },
+    // Carol *skips* the Monday 11:00–11:30 chunk, so that becomes 4-person
+    { day: 4, start: 9 * 60, end: 9 * 60 + 30 },
+  ],
+  Dave: [
+    { day: 2, start: 9 * 60, end: 10 * 60 + 30 },
+    { day: 3, start: 15 * 60, end: 17 * 60 },
+    { day: 0, start: 11 * 60, end: 11 * 60 + 30 },
+    { day: 4, start: 9 * 60, end: 9 * 60 + 30 },
+  ],
+  Eve: [
+    { day: 0, start: 11 * 60, end: 13 * 60 },
+    { day: 4, start: 9 * 60, end: 9 * 60 + 30 },
+  ],
 };
 
 const GroupAvailability: React.FC = () => {
   const theme = useTheme();
 
-  // build a map dayIndex → slot → list of avail users
+  // build 30-minute slots from 9:00 to 18:00
+  const slots = useMemo(() => {
+    const a: number[] = [];
+    for (let m = 9 * 60; m <= 18 * 60; m += 30) a.push(m);
+    return a;
+  }, []);
+
+  // map "day-slot" to list of names
   const countMap = useMemo(() => {
-    const m: Record<number, Record<number, string[]>> = {};
-    for (let di = 0; di < 7; di++) {
-      m[di] = {};
-      for (let t = EARLIEST; t <= LATEST; t += SLOT_MIN) {
-        m[di][t] = USERS.filter(u => sampleAvailability[u]?.[di]?.has(t));
+    const m: Record<string, string[]> = {};
+    for (let day = 0; day < 7; day++) {
+      for (let slot of slots) {
+        m[`${day}-${slot}`] = NAMES.filter((name) =>
+          SAMPLE[name].some(
+            (i) => i.day === day && slot >= i.start && slot < i.end
+          )
+        );
       }
     }
     return m;
-  }, []);
+  }, [slots]);
 
-  // build array of all slot times
-  const slots = useMemo(() => {
-    const out: number[] = [];
-    for (let t = EARLIEST; t <= LATEST; t += SLOT_MIN) out.push(t);
-    return out;
-  }, []);
+  const [view, setView] = useState<0 | 1>(0);
+  const [minPeople, setMinPeople] = useState(1);
 
-  // UI state
-  const [viewTab, setViewTab]     = useState<0|1>(0);
-  const [filterMin, setFilterMin] = useState(0);
-
-  // color helper: success green with varying alpha
-  const getCellColor = (count: number) =>
-    alpha(theme.palette.success.main, 0.1 + 0.7 * (count / TOTAL));
-
-  // --- prepare grouped intervals for List view ---
-  const grouped = useMemo(() => {
+  // prepare list-view intervals (coalesced contiguous half-hours)
+  const listData = useMemo(() => {
     type G = { day: number; start: number; end: number; users: string[] };
-    const out: G[] = [];
-
-    for (let di = 0; di < 7; di++) {
-      // gather only slots meeting the filter
-      const items = slots
-        .map(t => ({
-          t,
-          users: countMap[di][t].slice().sort()
-        }))
-        .filter(x => x.users.length >= filterMin);
-
-      if (!items.length) continue;
-
-      // group contiguous slots that have the **same exact** user list
-      let grp = items[0];
-      for (let i = 1; i <= items.length; i++) {
-        const curr = items[i];
-        const sameUsers = curr && 
-          JSON.stringify(curr.users) === JSON.stringify(grp.users);
-        const contiguous = curr && curr.t === grp.t + SLOT_MIN;
-
-        if (curr && sameUsers && contiguous) {
-          // extend group
-          grp = { ...grp };
-          grp.t = curr.t; // track end
+    const all: G[] = [];
+    // get slots meeting threshold
+    Object.entries(countMap)
+      .filter(([, users]) => users.length >= minPeople)
+      .map(([key, users]) => {
+        const [d, s] = key.split("-").map(Number);
+        return { day: d, start: s, users };
+      })
+      .sort((a, b) =>
+        a.day === b.day ? a.start - b.start : a.day - b.day
+      )
+      .forEach(({ day, start, users }) => {
+        const last = all[all.length - 1];
+        const sameSet =
+          last &&
+          last.day === day &&
+          start === last.end &&
+          JSON.stringify(last.users.sort()) ===
+            JSON.stringify(users.sort());
+        if (sameSet) {
+          last.end += 30;
         } else {
-          // push completed group: start at grp.t_start, end = grp.t + SLOT_MIN
-          out.push({
-            day: di,
-            start: items[i-1 - (sameUsers && contiguous ? 1 : 0)].t,
-            end: grp.t + SLOT_MIN,
-            users: grp.users
-          });
-          if (curr) grp = curr;
+          all.push({ day, start, end: start + 30, users });
         }
-      }
-    }
-    return out;
-  }, [countMap, slots, filterMin]);
+      });
+    return all;
+  }, [countMap, minPeople]);
 
   return (
     <Box
       sx={{
         minHeight: "100vh",
-        display: "flex", 
+        p: 2,
+        display: "flex",
         alignItems: "center",
         justifyContent: "center",
         background: "linear-gradient(135deg, #5B0EED 0%, #2575fc 100%)",
-        p:2,
       }}
     >
       <Paper
         elevation={10}
-        sx={{ width:"90%", maxWidth:1000, p:4, borderRadius:2 }}
+        sx={{ width: 800, maxWidth: "100%", p: 4, borderRadius: 2 }}
       >
         <Typography variant="h4" fontWeight="bold" gutterBottom>
           Group Availability
@@ -138,105 +146,151 @@ const GroupAvailability: React.FC = () => {
           Hover for names; click a cell to select a slot.
         </Typography>
 
-        {/* Tabs + Filter */}
-        <Box sx={{ display:"flex", alignItems:"center", mb:2 }}>
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            mb: 2,
+          }}
+        >
           <Tabs
-            value={viewTab}
-            onChange={(_,v)=>setViewTab(v as 0|1)}
-            sx={{ flexGrow:1 }}
+            value={view}
+            onChange={(_, v) => setView(v as 0 | 1)}
+            textColor="primary"
+            indicatorColor="primary"
           >
             <Tab label="Grid View" />
             <Tab label="List View" />
           </Tabs>
 
-          <FormControl size="small" sx={{ width:140 }}>
-            <InputLabel>At least</InputLabel>
+          <FormControl size="small">
+            <InputLabel>Min People</InputLabel>
             <Select
-              label="At least"
-              value={filterMin}
-              onChange={e=>setFilterMin(Number(e.target.value))}
+              label="Min People"
+              value={minPeople}
+              onChange={(e) => setMinPeople(Number(e.target.value))}
             >
-              <MenuItem value={0}>All</MenuItem>
-              {[1,2,3,4,5].map(n=>(
-                <MenuItem key={n} value={n}>{`${n} people`}</MenuItem>
+              {[1, 2, 3, 4, 5].map((n) => (
+                <MenuItem key={n} value={n}>
+                  ≥ {n}
+                </MenuItem>
               ))}
             </Select>
-            <FormHelperText>show slots with ≥ N</FormHelperText>
           </FormControl>
         </Box>
 
-        {viewTab === 0 ? (
-          /* -------- GRID VIEW -------- */
-          <TableContainer sx={{ maxHeight:400 }}>
+        {view === 0 ? (
+          // —— GRID VIEW —— 
+          <TableContainer sx={{ maxHeight: 400 }}>
             <Table stickyHeader>
               <TableHead>
                 <TableRow>
-                  <TableCell><strong>Time</strong></TableCell>
-                  {DAYS.map(d=>
-                    <TableCell key={d} align="center"><strong>{d}</strong></TableCell>
-                  )}
+                  <TableCell>Time</TableCell>
+                  {DAYS.map((d) => (
+                    <TableCell key={d} align="center">
+                      {d}
+                    </TableCell>
+                  ))}
                 </TableRow>
               </TableHead>
               <TableBody>
-                {slots.map(t=>{
-                  // skip row if none meet filter
-                  const counts = DAYS.map((_,di)=>countMap[di][t].length);
-                  if (Math.max(...counts) < filterMin) return null;
-
-                  return (
-                    <TableRow key={t} hover>
-                      <TableCell sx={{ whiteSpace:"nowrap" }}>
-                        {dayjs().hour(0).minute(t).format("h:mm A")}
-                      </TableCell>
-                      {DAYS.map((_,di)=>{
-                        const users = countMap[di][t];
-                        if (users.length < filterMin) {
-                          return <TableCell key={di+"-"+t} />;
-                        }
-                        return (
-                          <Tooltip
-                            key={di+"-"+t}
-                            title={users.join(", ")}
-                            arrow
-                          >
-                            <TableCell
-                              sx={{
-                                bgcolor: getCellColor(users.length),
-                                cursor: "pointer",
-                                height: 32
-                              }}
-                              onClick={()=>{/* your select logic */}}
-                            />
-                          </Tooltip>
-                        );
-                      })}
-                    </TableRow>
-                  );
-                })}
+                {slots.map((slot) => (
+                  <TableRow key={slot} hover>
+                    <TableCell>
+                      {dayjs()
+                        .startOf("day")
+                        .add(slot, "minute")
+                        .format("h:mm A")}
+                    </TableCell>
+                    {DAYS.map((_, day) => {
+                      const users = countMap[`${day}-${slot}`] || [];
+                      const meets = users.length >= minPeople;
+                      return (
+                        <TableCell
+                          key={day + "-" + slot}
+                          sx={{
+                            bgcolor: meets
+                              ? alpha(
+                                  theme.palette.success.main,
+                                  0.4 + (users.length / TOTAL) * 0.6
+                                )
+                              : theme.palette.grey[100],
+                            cursor: "pointer",
+                            p: 0,
+                            height: 32,
+                          }}
+                        />
+                      );
+                    })}
+                  </TableRow>
+                ))}
               </TableBody>
             </Table>
           </TableContainer>
         ) : (
-          /* ------- LIST VIEW ------- */
-          <List
-            sx={{ maxHeight:400, overflowY:"auto" }}
-            subheader={
-              <ListSubheader sx={{ bgcolor:"transparent" }}>
-                Showing slots with ≥ {filterMin} people
-              </ListSubheader>
-            }
-          >
-            {grouped.map((g,i)=>(
-              <ListItem key={i} divider>
-                <ListItemText
-                  primary={`${DAYS[g.day]} – ` +
-                           `${dayjs().minute(g.start).format("h:mm A")} ` +
-                           `to ${dayjs().minute(g.end).format("h:mm A")}`}
-                  secondary={g.users.join(", ")}
-                />
-              </ListItem>
-            ))}
-          </List>
+          // —— LIST VIEW —— 
+          <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
+            {listData.map((g, i) => {
+              const ratio = g.users.length / TOTAL;
+              const borderColor = alpha(
+                theme.palette.success.main,
+                0.4 + ratio * 0.6
+              );
+              return (
+                <Paper
+                  key={i}
+                  elevation={1}
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    borderLeft: `5px solid ${borderColor}`,
+                    p: 2,
+                    mb: 1,
+                  }}
+                >
+                  <Box sx={{ flexGrow: 1 }}>
+                    <Typography variant="h6">
+                      {DAYS[g.day]} —{" "}
+                      {dayjs()
+                        .startOf("day")
+                        .add(g.start, "minute")
+                        .format("h:mm A")}{" "}
+                      to{" "}
+                      {dayjs()
+                        .startOf("day")
+                        .add(g.end, "minute")
+                        .format("h:mm A")}
+                    </Typography>
+                    <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
+                      {g.users.map((u) => (
+                        <Chip
+                          key={u}
+                          label={u}
+                          size="small"
+                          variant="outlined"
+                        />
+                      ))}
+                    </Stack>
+                  </Box>
+                  <Chip
+                    label={`${g.users.length}/${TOTAL}`}
+                    color="success"
+                    size="small"
+                  />
+                </Paper>
+              );
+            })}
+            {listData.length === 0 && (
+              <Typography
+                variant="body2"
+                color="textSecondary"
+                sx={{ textAlign: "center", mt: 4 }}
+              >
+                No slots match your filter.
+              </Typography>
+            )}
+          </Box>
         )}
       </Paper>
     </Box>
